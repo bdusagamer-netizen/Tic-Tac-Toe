@@ -3,7 +3,317 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tic-Tac-Toe Multiplayer</title>
+    <title>Tic-Tac-Toe</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 400px;
+        }
+        .setup {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        input {
+            padding: 10px;
+            font-size: 16px;
+            border: 2px solid #667eea;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #764ba2;
+        }
+        .board {
+            display: grid;
+            grid-template-columns: repeat(3, 80px);
+            gap: 8px;
+            margin: 20px auto;
+        }
+        .cell {
+            width: 80px;
+            height: 80px;
+            font-size: 28px;
+            background: #f0f0f0;
+            border: 2px solid #667eea;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        .cell:hover {
+            background: #e8e8e8;
+        }
+        .cell:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #status {
+            font-size: 18px;
+            margin: 15px 0;
+            font-weight: bold;
+        }
+        .hidden {
+            display: none;
+        }
+        #winsDisplay {
+            font-size: 14px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Tic-Tac-Toe</h1>
+        
+        <div id="setupScreen" class="setup">
+            <p id="winsDisplay"><strong>Wins:</strong> X: <span id="winsXCount">0</span> | O: <span id="winsOCount">0</span></p>
+            <input type="text" id="playerName" placeholder="Your name" maxlength="20">
+            <input type="text" id="roomCode" placeholder="Room code" maxlength="4">
+            <button onclick="joinGame()">Join Game</button>
+        </div>
+
+        <div id="gameScreen" class="hidden">
+            <p id="status"></p>
+            <p id="roomInfo"></p>
+            <div class="board" id="board"></div>
+            <button onclick="resetGame()">New Game</button>
+            <button onclick="leaveGame()">Leave</button>
+        </div>
+    </div>
+
+    <script>
+        // Detect environment and set API URL
+        const API_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:10000' 
+            : 'http://localhost:10000';
+        
+        let state = {
+            playerName: '',
+            roomCode: '',
+            mySymbol: '',
+            currentPlayer: 'X',
+            board: Array(9).fill(''),
+            gameActive: true,
+            winsX: 0,
+            winsO: 0,
+            playerXName: '',
+            playerOName: '',
+            syncInterval: null
+        };
+
+        const winConditions = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+
+        async function joinGame() {
+            state.playerName = document.getElementById('playerName').value.trim();
+            state.roomCode = document.getElementById('roomCode').value.trim();
+
+            if (!state.playerName || !state.roomCode) {
+                alert('Enter name and room code');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_URL}/api/game/${state.roomCode}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ playerName: state.playerName })
+                });
+
+                if (!res.ok) {
+                    alert('Room full');
+                    return;
+                }
+
+                const data = await res.json();
+                state.mySymbol = data.symbol;
+                state.playerXName = data.playerX;
+                state.playerOName = data.playerO;
+                state.board = data.board;
+                state.currentPlayer = data.currentPlayer;
+                state.winsX = data.winsX;
+                state.winsO = data.winsO;
+
+                startGame();
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        function startGame() {
+            document.getElementById('setupScreen').classList.add('hidden');
+            document.getElementById('gameScreen').classList.remove('hidden');
+            document.getElementById('roomInfo').textContent = 
+                `Room: ${state.roomCode} | You: ${state.mySymbol} (${state.playerName}) | Opponent: ${state.mySymbol === 'X' ? state.playerOName : state.playerXName}`;
+            
+            render();
+            state.syncInterval = setInterval(sync, 300);
+        }
+
+        async function sync() {
+            try {
+                const res = await fetch(`${API_URL}/api/game/${state.roomCode}`);
+                if (!res.ok) return;
+                
+                const data = await res.json();
+                state.board = data.board;
+                state.currentPlayer = data.currentPlayer;
+                state.gameActive = data.gameActive;
+                state.winsX = data.winsX;
+                state.winsO = data.winsO;
+                
+                render();
+            } catch (e) {
+                console.error('Sync error:', e);
+            }
+        }
+
+        function render() {
+            const board = document.getElementById('board');
+            board.innerHTML = '';
+            
+            state.board.forEach((cell, i) => {
+                const btn = document.createElement('button');
+                btn.className = 'cell';
+                btn.textContent = cell;
+                btn.disabled = !state.gameActive || state.currentPlayer !== state.mySymbol;
+                btn.onclick = () => makeMove(i);
+                board.appendChild(btn);
+            });
+
+            updateStatus();
+            updateWins();
+        }
+
+        async function makeMove(idx) {
+            if (state.board[idx] || !state.gameActive || state.currentPlayer !== state.mySymbol) return;
+
+            state.board[idx] = state.mySymbol;
+            
+            const winner = getWinner();
+            if (winner) {
+                state.gameActive = false;
+                if (winner === 'X') state.winsX++;
+                else state.winsO++;
+            } else if (!state.board.includes('')) {
+                state.gameActive = false;
+            }
+            
+            state.currentPlayer = state.currentPlayer === 'X' ? 'O' : 'X';
+
+            try {
+                await fetch(`${API_URL}/api/game/${state.roomCode}/move`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        board: state.board,
+                        currentPlayer: state.currentPlayer,
+                        gameActive: state.gameActive,
+                        winsX: state.winsX,
+                        winsO: state.winsO
+                    })
+                });
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        function getWinner() {
+            for (let [a, b, c] of winConditions) {
+                if (state.board[a] && state.board[a] === state.board[b] && state.board[a] === state.board[c]) {
+                    return state.board[a];
+                }
+            }
+            return null;
+        }
+
+        function updateStatus() {
+            const winner = getWinner();
+            if (!state.gameActive) {
+                if (winner) {
+                    const name = winner === 'X' ? state.playerXName : state.playerOName;
+                    document.getElementById('status').textContent = `${name} wins!`;
+                } else {
+                    document.getElementById('status').textContent = 'Draw!';
+                }
+            } else {
+                const name = state.currentPlayer === 'X' ? state.playerXName : state.playerOName;
+                const indicator = state.currentPlayer === state.mySymbol ? '(your turn)' : '(waiting)';
+                document.getElementById('status').textContent = `${name}'s turn ${indicator}`;
+            }
+        }
+
+        function updateWins() {
+            document.getElementById('winsXCount').textContent = state.winsX;
+            document.getElementById('winsOCount').textContent = state.winsO;
+        }
+
+        async function resetGame() {
+            try {
+                const res = await fetch(`${API_URL}/api/game/${state.roomCode}/reset`, { method: 'POST' });
+                const data = await res.json();
+                
+                state.board = data.board;
+                state.currentPlayer = data.currentPlayer;
+                state.gameActive = data.gameActive;
+                render();
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        async function leaveGame() {
+            clearInterval(state.syncInterval);
+            
+            try {
+                await fetch(`${API_URL}/api/game/${state.roomCode}`, { method: 'DELETE' });
+            } catch (e) {
+                console.error('Leave error:', e);
+            }
+            
+            document.getElementById('setupScreen').classList.remove('hidden');
+            document.getElementById('gameScreen').classList.add('hidden');
+            
+            state = {
+                playerName: '',
+                roomCode: '',
+                mySymbol: '',
+                currentPlayer: 'X',
+                board: Array(9).fill(''),
+                gameActive: true,
+                winsX: 0,
+                winsO: 0,
+                playerXName: '',
+                playerOName: '',
+                syncInterval: null
+            };
+            
+            document.getElementById('playerName').value = '';
+            document.getElementById('roomCode').value = '';
+        }
+    </script>
+</body>
+</html>
+
 
     <style>
         body {
@@ -98,7 +408,26 @@
     </div>
 
     <script>
-        // ===== PURE WEBRTC P2P (NO EXTERNAL BACKEND) =====
+        // ===== FIREBASE CONFIG =====
+        // GET YOUR CONFIG FROM: https://firebase.google.com/docs/web/setup
+        // 1. Go to firebase.google.com, create project
+        // 2. Create Realtime Database (test mode)
+        // 3. Copy config and paste below:
+        const firebaseConfig = {
+            apiKey: "AIzaSyDemoPleaseReplaceThisWithYourOwnKey",
+            authDomain: "tic-tac-toe-demo.firebaseapp.com",
+            databaseURL: "https://tic-tac-toe-demo-default-rtdb.firebaseio.com",
+            projectId: "tic-tac-toe-demo",
+            storageBucket: "tic-tac-toe-demo.appspot.com",
+            messagingSenderId: "000000000000",
+            appId: "1:000000000000:web:0000000000000000"
+        };
+
+        // Initialize Firebase
+        const app = firebase.initializeApp(firebaseConfig);
+        const db = firebase.database(app);
+
+        // ===== GAME STATE =====
         let currentPlayer = 'X';
         let gameBoard = Array(9).fill('');
         let gameActive = true;
@@ -109,9 +438,8 @@
         let mySymbol = '';
         let winsX = 0;
         let winsO = 0;
-        let peerConnection = null;
-        let dataChannel = null;
-        let isInitiator = false;
+        let gameRef = null;
+        let syncListener = null;
 
         const winConditions = [
             [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -128,48 +456,41 @@
                 return;
             }
 
-            // Store game data in localStorage with room code
-            const localGames = JSON.parse(localStorage.getItem('tictacGames') || '{}');
+            gameRef = db.ref('games/' + roomCode);
             
-            if (localGames[roomCode]) {
-                // Join existing game as O
-                const existingGame = localGames[roomCode];
-                playerXName = existingGame.playerX;
-                playerOName = playerName;
-                mySymbol = 'O';
-                isInitiator = false;
-                gameBoard = [...existingGame.board];
-                currentPlayer = existingGame.currentPlayer;
-                gameActive = existingGame.gameActive;
-                winsX = existingGame.winsX;
-                winsO = existingGame.winsO;
-                
-                // Update game with O player
-                localGames[roomCode].playerO = playerOName;
-                localStorage.setItem('tictacGames', JSON.stringify(localGames));
-                
-                startGame();
-            } else {
-                // Create new game as X
-                playerXName = playerName;
-                mySymbol = 'X';
-                isInitiator = true;
-                
-                // Initialize new game
-                localGames[roomCode] = {
-                    playerX: playerXName,
-                    playerO: null,
-                    currentPlayer: 'X',
-                    board: Array(9).fill(''),
-                    gameActive: true,
-                    winsX: 0,
-                    winsO: 0,
-                    createdAt: new Date().toISOString()
-                };
-                localStorage.setItem('tictacGames', JSON.stringify(localGames));
-                
-                waitForOpponent();
-            }
+            gameRef.once('value', (snapshot) => {
+                if (snapshot.exists()) {
+                    // Room exists, join as O
+                    const gameData = snapshot.val();
+                    if (gameData.playerO) {
+                        alert('Room is full!');
+                        return;
+                    }
+                    playerXName = gameData.playerX;
+                    playerOName = playerName;
+                    mySymbol = 'O';
+                    
+                    gameRef.update({ playerO: playerOName }).then(() => {
+                        startGame();
+                    });
+                } else {
+                    // Create new room as X
+                    playerXName = playerName;
+                    mySymbol = 'X';
+                    
+                    gameRef.set({
+                        playerX: playerXName,
+                        playerO: null,
+                        currentPlayer: 'X',
+                        board: Array(9).fill(''),
+                        gameActive: true,
+                        winsX: 0,
+                        winsO: 0
+                    }).then(() => {
+                        waitForOpponent();
+                    });
+                }
+            });
         }
 
         function waitForOpponent() {
@@ -177,17 +498,15 @@
             document.getElementById('gameScreen').classList.remove('hidden');
             document.getElementById('status').textContent = 'Waiting for opponent...';
             document.getElementById('roomInfo').textContent = `Room: ${roomCode} | You: X (${playerXName})`;
-            document.getElementById('board').innerHTML = '<p style="grid-column: 1/-1; padding: 20px;">Waiting for opponent to join...\n\nShare room code: <strong>' + roomCode + '</strong></p>';
+            document.getElementById('board').innerHTML = '<p style="grid-column: 1/-1; padding: 20px;">Waiting for opponent...<br><br>Share room code: <strong>' + roomCode + '</strong></p>';
             
-            // Poll for opponent
-            const checkInterval = setInterval(() => {
-                const localGames = JSON.parse(localStorage.getItem('tictacGames') || '{}');
-                if (localGames[roomCode] && localGames[roomCode].playerO) {
-                    playerOName = localGames[roomCode].playerO;
-                    clearInterval(checkInterval);
+            const opponentListener = gameRef.on('value', (snapshot) => {
+                if (snapshot.exists() && snapshot.val().playerO) {
+                    playerOName = snapshot.val().playerO;
+                    gameRef.off('value', opponentListener);
                     startGame();
                 }
-            }, 500);
+            });
         }
 
         function startGame() {
@@ -196,25 +515,21 @@
             document.getElementById('roomInfo').textContent = 
                 `Room: ${roomCode} | You: ${mySymbol} (${playerName}) | Opponent: ${mySymbol === 'X' ? playerOName : playerXName}`;
             
-            // Poll for game updates
-            syncGameState();
-            setInterval(syncGameState, 200);
-        }
-
-        function syncGameState() {
-            const localGames = JSON.parse(localStorage.getItem('tictacGames') || '{}');
-            if (localGames[roomCode]) {
-                const gameData = localGames[roomCode];
-                gameBoard = [...gameData.board];
-                currentPlayer = gameData.currentPlayer;
-                gameActive = gameData.gameActive;
-                winsX = gameData.winsX;
-                winsO = gameData.winsO;
-                
-                initializeBoard();
-                updateStatus();
-                updateWinsDisplay();
-            }
+            // Listen for all game updates
+            syncListener = gameRef.on('value', (snapshot) => {
+                if (snapshot.exists()) {
+                    const gameData = snapshot.val();
+                    gameBoard = [...gameData.board];
+                    currentPlayer = gameData.currentPlayer;
+                    gameActive = gameData.gameActive;
+                    winsX = gameData.winsX;
+                    winsO = gameData.winsO;
+                    
+                    initializeBoard();
+                    updateStatus();
+                    updateWinsDisplay();
+                }
+            });
         }
 
         function initializeBoard() {
@@ -231,12 +546,7 @@
         }
 
         function makeMove(index) {
-            if (gameBoard[index] !== '' || !gameActive) {
-                return;
-            }
-            
-            if (currentPlayer !== mySymbol) {
-                alert(`It's ${currentPlayer}'s turn!`);
+            if (gameBoard[index] !== '' || !gameActive || currentPlayer !== mySymbol) {
                 return;
             }
 
@@ -253,19 +563,13 @@
             
             currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
             
-            // Save to localStorage
-            const localGames = JSON.parse(localStorage.getItem('tictacGames') || '{}');
-            localGames[roomCode] = {
-                playerX: playerXName,
-                playerO: playerOName,
-                currentPlayer: currentPlayer,
+            gameRef.update({
                 board: gameBoard,
+                currentPlayer: currentPlayer,
                 gameActive: gameActive,
                 winsX: winsX,
-                winsO: winsO,
-                createdAt: localGames[roomCode].createdAt
-            };
-            localStorage.setItem('tictacGames', JSON.stringify(localGames));
+                winsO: winsO
+            });
         }
 
         function getWinner() {
@@ -288,11 +592,11 @@
             currentPlayer = 'X';
             gameActive = true;
             
-            const localGames = JSON.parse(localStorage.getItem('tictacGames') || '{}');
-            localGames[roomCode].board = gameBoard;
-            localGames[roomCode].currentPlayer = 'X';
-            localGames[roomCode].gameActive = true;
-            localStorage.setItem('tictacGames', JSON.stringify(localGames));
+            gameRef.update({
+                board: gameBoard,
+                currentPlayer: 'X',
+                gameActive: true
+            });
         }
 
         function updateStatus() {
@@ -306,24 +610,21 @@
                 }
             } else {
                 const currentName = currentPlayer === 'X' ? playerXName : playerOName;
-                const turnIndicator = currentPlayer === mySymbol ? '(YOUR TURN)' : '(opponent)';
-                document.getElementById('status').textContent = `${currentName}'s turn (${currentPlayer}) ${turnIndicator}`;
+                const turnIndicator = currentPlayer === mySymbol ? '(YOUR TURN)' : '(opponent turn)';
+                document.getElementById('status').textContent = `${currentName}'s turn ${turnIndicator}`;
             }
         }
 
         function leaveGame() {
-            const localGames = JSON.parse(localStorage.getItem('tictacGames') || '{}');
+            if (syncListener) {
+                gameRef.off('value', syncListener);
+            }
             
             if (mySymbol === 'X') {
-                // X deletes the room
-                delete localGames[roomCode];
+                gameRef.remove();
             } else {
-                // O just clears themselves
-                if (localGames[roomCode]) {
-                    localGames[roomCode].playerO = null;
-                }
+                gameRef.update({ playerO: null });
             }
-            localStorage.setItem('tictacGames', JSON.stringify(localGames));
             
             document.getElementById('setupScreen').classList.remove('hidden');
             document.getElementById('gameScreen').classList.add('hidden');
@@ -339,7 +640,3 @@
     </script>
 </body>
 </html>
-    </script>
-</body>
-</html>
-
