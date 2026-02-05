@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tic-Tac-Toe</title>
+    <title>Tic-Tac-Toe Multiplayer</title>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -97,14 +99,37 @@
     </div>
 
     <script>
+        // ===== FIREBASE CONFIG =====
+        // PASTE YOUR FIREBASE CONFIG HERE:
+        const firebaseConfig = {
+            apiKey: "AIzaSyDemoPleaseReplaceThisWithYourOwnFirebaseKey",
+            authDomain: "tic-tac-toe-demo.firebaseapp.com",
+            databaseURL: "https://tic-tac-toe-demo-default-rtdb.firebaseio.com",
+            projectId: "tic-tac-toe-demo",
+            storageBucket: "tic-tac-toe-demo.appspot.com",
+            messagingSenderId: "000000000000",
+            appId: "1:000000000000:web:0000000000000000"
+        };
+
+        // Initialize Firebase
+        const app = firebase.initializeApp(firebaseConfig);
+        const db = firebase.database(app);
+
+        // ===== GAME STATE =====
         let currentPlayer = 'X';
         let gameBoard = Array(9).fill('');
         let gameActive = true;
         let playerName = '';
         let roomCode = '';
-        let isCreator = false;
+        let playerXName = '';
+        let playerOName = '';
+        let currentPlayerName = '';
+        let mySymbol = ''; // 'X' or 'O'
         let winsX = 0;
         let winsO = 0;
+        let gameRef = null;
+        let gameListener = null;
+        let syncing = false;
 
         const winConditions = [
             [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -121,15 +146,88 @@
                 return;
             }
 
-            isCreator = Math.random() > 0.5;
+            if (roomCode.length !== 4) {
+                alert('Room code must be 4 characters');
+                return;
+            }
+
+            gameRef = db.ref('games/' + roomCode);
+            
+            // Check if room exists
+            gameRef.once('value', (snapshot) => {
+                if (snapshot.exists()) {
+                    // Room exists, join as O
+                    const gameData = snapshot.val();
+                    if (gameData.playerO) {
+                        alert('Room is full!');
+                        return;
+                    }
+                    playerXName = gameData.playerX;
+                    playerOName = playerName;
+                    mySymbol = 'O';
+                    currentPlayerName = playerXName; // X always goes first
+                    joinExistingGame();
+                } else {
+                    // Create new room
+                    playerXName = playerName;
+                    mySymbol = 'X';
+                    
+                    const secondPlayer = prompt('Enter opponent name (they will be O):');
+                    if (!secondPlayer) return;
+                    playerOName = secondPlayer;
+                    currentPlayerName = playerXName;
+                    createNewGame();
+                }
+            });
+        }
+
+        function createNewGame() {
+            gameRef.set({
+                playerX: playerXName,
+                playerO: playerOName,
+                currentPlayer: 'X',
+                board: gameBoard,
+                gameActive: true,
+                winsX: winsX,
+                winsO: winsO,
+                createdAt: new Date().toISOString()
+            }).then(() => {
+                startGame();
+            });
+        }
+
+        function joinExistingGame() {
+            gameRef.update({
+                playerO: playerOName
+            }).then(() => {
+                startGame();
+            });
+        }
+
+        function startGame() {
             document.getElementById('setupScreen').classList.add('hidden');
             document.getElementById('gameScreen').classList.remove('hidden');
             document.getElementById('roomInfo').textContent = 
-                `${playerName} | Room: ${roomCode} | You are: ${isCreator ? 'X' : 'O'}`;
+                `Room: ${roomCode} | You: ${mySymbol} (${playerName}) | Opponent: ${mySymbol === 'X' ? 'O (' + playerOName + ')' : 'X (' + playerXName + ')'}`;
             
-            if (!isCreator) currentPlayer = 'X';
-            initializeBoard();
-            updateStatus();
+            // Listen for game updates from Firebase
+            gameListener = gameRef.on('value', (snapshot) => {
+                if (!snapshot.exists()) return;
+                
+                syncing = true;
+                const gameData = snapshot.val();
+                gameBoard = gameData.board || Array(9).fill('');
+                currentPlayer = gameData.currentPlayer;
+                gameActive = gameData.gameActive;
+                winsX = gameData.winsX || 0;
+                winsO = gameData.winsO || 0;
+                currentPlayerName = currentPlayer === 'X' ? gameData.playerX : gameData.playerO;
+                
+                updateWinsDisplay();
+                initializeBoard();
+                updateStatus();
+                syncing = false;
+            });
         }
 
         function initializeBoard() {
@@ -139,18 +237,35 @@
                 const cell = document.createElement('button');
                 cell.className = 'cell';
                 cell.textContent = gameBoard[index];
+                cell.disabled = !gameActive || (currentPlayer !== mySymbol);
                 cell.onclick = () => makeMove(index);
                 board.appendChild(cell);
             });
         }
 
         function makeMove(index) {
+            // Only allow move if it's your turn
+            if (currentPlayer !== mySymbol) {
+                alert(`It's ${currentPlayerName}'s turn!`);
+                return;
+            }
+
             if (gameBoard[index] === '' && gameActive) {
-                gameBoard[index] = currentPlayer;
+                gameBoard[index] = mySymbol;
                 checkWin();
-                currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
-                updateStatus();
-                initializeBoard();
+                
+                if (gameActive) {
+                    currentPlayer = mySymbol === 'X' ? 'O' : 'X';
+                }
+                
+                // Update Firebase
+                gameRef.update({
+                    board: gameBoard,
+                    currentPlayer: currentPlayer,
+                    gameActive: gameActive,
+                    winsX: winsX,
+                    winsO: winsO
+                });
             }
         }
 
@@ -163,20 +278,35 @@
                     if (winner === 'X') winsX++;
                     else winsO++;
                     updateWinsDisplay();
-                    document.getElementById('status').textContent = `${winner} Wins!`;
                     return;
                 }
             }
             if (!gameBoard.includes('')) {
                 gameActive = false;
-                document.getElementById('status').textContent = 'Draw!';
             }
         }
 
         function updateStatus() {
-            if (gameActive) {
-                document.getElementById('status').textContent = `Current Player: ${currentPlayer}`;
+            if (!gameActive) {
+                const winner = checkGameWinner();
+                if (winner) {
+                    document.getElementById('status').textContent = `${winner} Wins!`;
+                } else {
+                    document.getElementById('status').textContent = 'Draw!';
+                }
+            } else {
+                document.getElementById('status').textContent = `${currentPlayerName}'s turn (${currentPlayer})`;
             }
+        }
+
+        function checkGameWinner() {
+            for (let condition of winConditions) {
+                const [a, b, c] = condition;
+                if (gameBoard[a] && gameBoard[a] === gameBoard[b] && gameBoard[a] === gameBoard[c]) {
+                    return gameBoard[a];
+                }
+            }
+            return null;
         }
 
         function updateWinsDisplay() {
@@ -188,14 +318,29 @@
             gameBoard = Array(9).fill('');
             currentPlayer = 'X';
             gameActive = true;
-            initializeBoard();
-            updateStatus();
+            
+            gameRef.update({
+                board: gameBoard,
+                currentPlayer: currentPlayer,
+                gameActive: gameActive
+            });
         }
 
         function leaveGame() {
+            if (gameListener) {
+                gameRef.off('value', gameListener);
+            }
+            
+            gameRef.update({
+                playerO: null
+            });
+            
+            gameRef = null;
             document.getElementById('setupScreen').classList.remove('hidden');
             document.getElementById('gameScreen').classList.add('hidden');
-            resetGame();
+            gameBoard = Array(9).fill('');
+            currentPlayer = 'X';
+            gameActive = true;
             document.getElementById('playerName').value = '';
             document.getElementById('roomCode').value = '';
         }
